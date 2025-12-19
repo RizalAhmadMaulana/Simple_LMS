@@ -1,0 +1,45 @@
+{% load humanize %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Semua Courses</title>
+    <style>
+        body { font-family: sans-serif; padding: 30px; background: #f8f9fa; color: #34495e; }
+        h1 { color: #1abc9c; border-bottom: 2px solid #1abc9c; display: inline-block; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #34495e; color: white; }
+        tr:hover { background-color: #f1f1f1; }
+        .btn-back { display: inline-block; margin-top: 20px; text-decoration: none; background: #34495e; color: white; padding: 10px 20px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>📚 Semua Mata Kuliah</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Nama Course</th>
+                <th>Pengajar</th>
+                <th>Harga</th>
+                <th>Deskripsi Singkat</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for course in courses %}
+            <tr>
+                <td>{{ course.id }}</td>
+                <td><b>{{ course.name }}</b></td>
+                <td>{{ course.teacher.username }}</td>
+                <td>Rp {{ course.price|intcomma }}</td>
+                <td>{{ course.description|truncatechars:50 }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" style="text-align:center;">Belum ada data course.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <a href="{% url 'home' %}" class="btn-back">⬅ Kembali ke Dashboard</a>
+</body>
+</html>

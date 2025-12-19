@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Statistik Member</title>
+    <style>
+        body { font-family: sans-serif; padding: 30px; background: #f8f9fa; text-align: center; }
+        h1 { color: #8e44ad; margin-bottom: 40px; }
+        .summary-box { background: #8e44ad; color: white; padding: 20px; border-radius: 10px; display: inline-block; margin-bottom: 30px; width: 300px; }
+        .detail-grid { display: flex; justify-content: center; gap: 20px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); width: 200px; }
+        .role-name { font-weight: bold; color: #34495e; font-size: 1.2em; text-transform: uppercase; }
+        .count { font-size: 2em; color: #8e44ad; margin-top: 10px; display: block; }
+        .btn-back { display: inline-block; margin-top: 40px; text-decoration: none; background: #34495e; color: white; padding: 10px 20px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>📉 Statistik Membership</h1>
+
+    <div class="summary-box">
+        <h2>Total Pendaftaran</h2>
+        <span style="font-size: 3em; font-weight: bold;">{{ total_members }}</span>
+    </div>
+
+    <div class="detail-grid">
+        {% for role in role_stats %}
+        <div class="card">
+            <span class="role-name">{{ role.roles }}</span>
+            <span class="count">{{ role.total }}</span>
+            <span style="font-size: 0.8em; color: #7f8c8d;">Orang</span>
+        </div>
+        {% empty %}
+        <p>Belum ada data role.</p>
+        {% endfor %}
+    </div>
+
+    <a href="{% url 'home' %}" class="btn-back">⬅ Kembali ke Dashboard</a>
+</body>
+</html>

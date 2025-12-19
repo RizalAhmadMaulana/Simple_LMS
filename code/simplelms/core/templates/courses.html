@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Courses - SimpleLMS API v2</title>
+
+    <style>
+        body { font-family: Arial, sans-serif; margin: 30px; }
+        h1 { margin-bottom: 20px; }
+        .toolbar { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        input, select { padding: 8px; font-size: 16px; }
+        button { padding: 8px 14px; font-size: 16px; cursor: pointer; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 10px; border: 1px solid #ccc; }
+        th { background: #f3f3f3; }
+        .pagination { margin-top: 20px; }
+        .pagination button { padding: 8px 12px; margin-right: 4px; }
+    </style>
+</head>
+
+<body>
+
+    <h1>Daftar Courses (API v2)</h1>
+
+    <div class="toolbar">
+        <input type="text" id="search" placeholder="Cari nama course...">
+        
+        <select id="sort">
+            <option value="id">Sort By: ID</option>
+            <option value="name">Sort By: Name</option>
+            <option value="price">Sort By: Price</option>
+        </select>
+
+        <select id="per_page">
+            <option value="5">5 per page</option>
+            <option value="10">10 per page</option>
+            <option value="20">20 per page</option>
+        </select>
+
+        <button onclick="loadCourses(1)">Search</button>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Nama Course</th>
+                <th>Deskripsi</th>
+                <th>Harga</th>
+            </tr>
+        </thead>
+        <tbody id="course-body">
+            <tr><td colspan="4">Loading...</td></tr>
+        </tbody>
+    </table>
+
+    <div class="pagination" id="pagination"></div>
+
+    <script>
+    let currentPage = 1;
+
+    function loadCourses(page) {
+        currentPage = page;
+
+        const search = document.getElementById("search").value;
+        const sort = document.getElementById("sort").value;
+        const perPage = parseInt(document.getElementById("per_page").value);
+
+        // === HITUNG SKIP & LIMIT ===
+        const skip = (page - 1) * perPage;
+        const limit = perPage;
+
+        // === PERBAIKAN 1: Gunakan Path Relatif (Tanpa http://localhost) ===
+        // Ini agar script jalan di port 8000, 8001, atau berapapun.
+        let url = `/api/v2/courses?skip=${skip}&limit=${limit}&sort=${sort}`;
+
+        // === PERBAIKAN 2: Tambahkan tanda kutip string yang benar ===
+        if (search.trim() !== "") {
+            url += `&search=${search}`;
+        }
+
+        console.log("Fetching URL:", url); // Cek URL di Console Browser
+
+        fetch(url)
+            .then(res => {
+                if (!res.ok) {
+                    throw new Error(`HTTP error! Status: ${res.status}`);
+                }
+                return res.json();
+            })
+            .then(data => {
+                const tbody = document.getElementById("course-body");
+                tbody.innerHTML = "";
+
+                if (!data.items || data.items.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="4">Tidak ada data</td></tr>`;
+                    return;
+                }
+
+                data.items.forEach(c => {
+                    tbody.innerHTML += `
+                        <tr>
+                            <td>${c.id}</td>
+                            <td>${c.name}</td>
+                            <td>${c.description}</td>
+                            <td>Rp ${c.price.toLocaleString()}</td>
+                        </tr>
+                    `;
+                });
+
+                // === PAGINATION BUILDER ===
+                const pagination = document.getElementById("pagination");
+                pagination.innerHTML = "";
+
+                // Hitung total halaman (Safe check biar tidak error division by zero)
+                const totalItems = data.total || 0;
+                const totalPages = Math.ceil(totalItems / perPage);
+
+                // Tombol Prev
+                if (page > 1) {
+                    pagination.innerHTML += `<button onclick="loadCourses(${page - 1})">Prev</button>`;
+                }
+
+                // Tombol Angka Halaman
+                for (let i = 1; i <= totalPages; i++) {
+                    pagination.innerHTML += `
+                        <button onclick="loadCourses(${i})"
+                            style="background:${i === page ? '#ddd' : 'white'}">
+                            ${i}
+                        </button>
+                    `;
+                }
+
+                // Tombol Next
+                if (page < totalPages) {
+                    pagination.innerHTML += `<button onclick="loadCourses(${page + 1})">Next</button>`;
+                }
+            })
+            .catch(err => {
+                console.error("Error fetching courses:", err);
+                const tbody = document.getElementById("course-body");
+                tbody.innerHTML = `<tr><td colspan="4" style="color:red;">Error: ${err.message}. Cek Console (F12) untuk detail.</td></tr>`;
+            });
+    }
+    loadCourses(1);
+    </script>
+
+</body>
+</html>

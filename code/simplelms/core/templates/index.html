@@ -1,0 +1,537 @@
+{% load static %}
+{% load humanize %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title|default:"Dashboard SimpleLMS" }}</title>
+    
+    <style>
+        /* --- COLOR PALETTE --- */
+        :root {
+            --primary-color: #1abc9c; /* Teal/Mint */
+            --secondary-color: #34495e; /* Dark Blue/Heading */
+            --accent-bg: #f8f9fa; /* Light Gray/White Background */
+            --price-color: #e74c3c; /* Red */
+        }
+        
+        /* --- GLOBAL STYLES --- */
+        body {
+            font-family: 'Poppins', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background-color: var(--accent-bg); 
+            background-image: radial-gradient(var(--accent-bg) 20%, transparent 20%), radial-gradient(#d5dbdb 20%, transparent 20%);
+            background-size: 20px 20px;
+            background-position: 0 0, 10px 10px;
+            color: var(--secondary-color);
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+        
+        /* --- HEADER / NAVBAR --- */
+        .main-header {
+            background-color: var(--secondary-color); 
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2); 
+            padding: 15px 50px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky; 
+            top: 0;
+            z-index: 100;
+        }
+        .logo {
+            font-size: 1.8em;
+            font-weight: 800;
+            color: var(--primary-color); 
+        }
+        .nav-links a {
+            color: white; 
+            text-decoration: none;
+            padding: 10px 15px;
+            margin-left: 10px;
+            border-radius: 25px; 
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        .nav-links a:hover {
+            background-color: var(--primary-color);
+            color: white;
+        }
+        .dropdown {
+            position: relative;
+            display: inline-block;
+            margin-left: 10px;
+        }
+        .dropdown-button {
+            color: white; 
+            background-color: transparent;
+            text-decoration: none;
+            padding: 10px 15px;
+            border-radius: 25px; 
+            transition: all 0.3s ease;
+            cursor: pointer;
+            font-weight: 500;
+            display: block;
+        }
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            background-color: #34495e;
+            min-width: 220px;
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.4);
+            z-index: 101;
+            border-radius: 8px;
+            top: 100%;
+            left: 0;
+            padding: 5px 0;
+        }
+        .dropdown-content a {
+            color: white;
+            padding: 12px 16px;
+            text-decoration: none;
+            display: block;
+            text-align: left;
+            border-radius: 0;
+            margin: 0;
+        }
+        .dropdown-content a:hover {
+            background-color: var(--primary-color);
+            color: white;
+        }
+        .dropdown:hover .dropdown-content {
+            display: block;
+        }
+
+        /* --- HERO SECTION --- */
+        .hero {
+            background: linear-gradient(to right bottom, #3498db, var(--primary-color));
+            padding: 100px 50px;
+            text-align: center;
+            margin-bottom: 40px;
+            color: white;
+            border-bottom-left-radius: 30px;
+            border-bottom-right-radius: 30px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+        }
+        .hero h1 {
+            font-size: 3.8em;
+            text-shadow: 3px 3px 5px rgba(0, 0, 0, 0.3);
+            font-weight: 900;
+            animation: fadeInDown 1s ease-out; 
+            margin-bottom: 20px;
+        }
+        .hero p {
+            font-size: 1.3em;
+            margin-bottom: 40px;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .cta-container {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 20px; /* Jarak antar tombol */
+        }
+
+        .btn-cta {
+            background-color: #f1c40f; 
+            color: var(--secondary-color);
+            padding: 15px 35px; /* Sedikit dikecilkan agar muat banyak */
+            border-radius: 50px; 
+            font-weight: 800;
+            letter-spacing: 1px;
+            box-shadow: 0 8px #d4ac0d;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            display: inline-block;
+            margin: 10px; /* Jarak aman tambahan untuk mobile */
+        }
+        .btn-cta:hover {
+            background-color: #f39c12;
+            transform: translateY(-3px);
+            color: white;
+        }
+        .btn-cta:active {
+            transform: translateY(4px);
+            box-shadow: 0 2px #d4ac0d;
+        }
+
+        /* --- STATS CARD SECTION --- */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); /* Responsif */
+            gap: 30px;
+            margin-top: 40px; 
+            position: relative;
+            z-index: 10;
+        }
+        .stat-card {
+            padding: 30px 20px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            position: relative;
+            color: white;
+        }
+        .stat-card:hover {
+            transform: translateY(-8px) scale(1.03); 
+            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.3);
+        }
+        .stat-icon {
+            font-size: 3.5em;
+            margin-bottom: 5px;
+            color: white; 
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
+        }
+        .stat-number {
+            font-size: 3.2em;
+            font-weight: 900;
+            margin: 0 0 5px 0;
+            color: white;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.2);
+        }
+        .stat-label {
+            color: rgba(255, 255, 255, 0.9);
+            font-weight: 600;
+            font-size: 1em; 
+        }
+        
+        /* WARNA CARD SPESIFIK */
+        .card-mint { background: linear-gradient(135deg, #1abc9c, #16a085); }
+        .card-blue { background: linear-gradient(135deg, #3498db, #2980b9); }
+        .card-yellow { background: linear-gradient(135deg, #f1c40f, #f39c12); }
+        .card-red { background: linear-gradient(135deg, #e74c3c, #c0392b); }
+
+
+        /* --- FEATURES SECTION --- */
+        .features-section {
+            padding: 60px 0;
+            background-color: white; 
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+            margin: 60px auto; 
+        }
+        .features-section h2 {
+            color: var(--primary-color);
+            margin-bottom: 50px;
+            font-weight: 700;
+            text-align: center;
+        }
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); 
+            gap: 30px;
+            text-align: center;
+            padding: 0 20px;
+        }
+        .feature-card {
+            padding: 30px;
+            border-radius: 10px;
+            background: var(--accent-bg);
+            transition: background 0.3s ease;
+        }
+        .feature-card:hover {
+            background: #e0e0e0;
+        }
+        .feature-icon {
+            font-size: 2.5em;
+            color: var(--primary-color);
+            margin-bottom: 15px;
+        }
+        .feature-card h4 {
+            color: var(--secondary-color);
+            font-weight: 700;
+        }
+
+
+        /* --- COURSE GRID --- */
+        .container h2 {
+            color: var(--secondary-color);
+            text-align: center;
+            margin-top: 80px; 
+            margin-bottom: 40px;
+            font-weight: 700;
+            position: relative;
+        }
+        .course-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 40px; 
+        }
+        
+        /* --- CARD KURSUS --- */
+        .course-card {
+            background: white;
+            border-radius: 15px; 
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); 
+            overflow: hidden;
+            transition: transform 0.4s ease, box-shadow 0.4s ease;
+            position: relative;
+            cursor: pointer;
+            border: 1px solid #e9ecef; 
+        }
+        .course-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 8px;
+            background: linear-gradient(90deg, #3498db, var(--primary-color)); 
+            transition: height 0.3s ease;
+        }
+        .course-card:hover {
+            transform: translateY(-10px) scale(1.02); 
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2); 
+        }
+        .course-card:hover::before {
+            height: 12px; 
+        }
+        
+        .card-body {
+            padding: 30px;
+        }
+        .card-body h3 {
+            color: var(--secondary-color);
+            font-size: 1.6em;
+            margin-bottom: 15px;
+            font-weight: 700;
+        }
+        .teacher {
+            color: #7f8c8d;
+            font-size: 0.9em;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px dashed var(--accent-bg); 
+        }
+        .price-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 20px;
+        }
+        .price {
+            font-weight: 800;
+            color: var(--price-color); 
+            font-size: 1.5em;
+        }
+        .member-count {
+            color: white;
+            font-size: 0.9em;
+            font-weight: 700;
+            background: linear-gradient(45deg, #3498db, #5dade2); 
+            padding: 8px 15px;
+            border-radius: 50px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Animasi */
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* --- FOOTER SECTION --- */
+        .footer {
+            background-color: var(--secondary-color); 
+            color: rgba(255, 255, 255, 0.8);
+            padding: 40px 0;
+            margin-top: 40px; 
+            font-size: 0.9em;
+        }
+        .footer-content {
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap; /* Agar responsif */
+            max-width: 1200px;
+            margin: auto;
+            padding: 0 20px;
+            gap: 20px;
+        }
+        .footer-section h4 {
+            color: var(--primary-color); 
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            font-weight: 700;
+        }
+        .footer-links a {
+            display: block;
+            color: rgba(255, 255, 255, 0.7);
+            text-decoration: none;
+            margin-bottom: 8px;
+            transition: color 0.2s;
+        }
+        .footer-links a:hover {
+            color: white;
+        }
+        .copyright {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="main-header">
+        <div class="logo">📚 SimpleLMS</div>
+        <div class="nav-links">
+            <a href="{% url 'admin:index' %}">Admin Panel</a>
+            
+            <div class="dropdown">
+                <span class="dropdown-button">Data Reports</span>
+                <div class="dropdown-content">
+                    <a href="{% url 'api_all_courses' %}">Tabel Semua Course</a>
+                    <a href="{% url 'api_user_courses' %}">Tabel User & Course</a>
+                    <a href="{% url 'api_course_stats' %}">Statistik Harga</a>
+                    <a href="{% url 'api_member_stats' %}">Statistik Member</a>
+                </div>
+            </div>
+            
+            <a href="{% url 'silk:requests' %}">Profiling Silk</a>
+        </div>
+    </div>
+
+    <div class="hero">
+        <h1>🚀 Temukan Ilmu Baru, Mulai Sekarang.</h1>
+        <p>Akses semua mata kuliah berkualitas tinggi yang diajarkan oleh para ahli. Platform belajar Anda, SimpleLMS.</p>
+        
+        <div class="cta-container">
+            <a href="{% url 'view_courses' %}" class="btn-cta" style="background-color: #00c54f;">🎓 Courses View</a>
+            <a href="{% url 'view_users' %}" class="btn-cta">👥 Users View</a>
+            
+            <a href="/api/v1/docs" class="btn-cta" style="background-color: #3498db;">📚 Docs API V1</a>
+            <a href="/api/v2/docs" class="btn-cta" style="background-color: #e74c3c;">🚀 Docs API V2</a>
+            <a href="/api/v2/openapi.json" target="_blank" class="btn-cta" style="background-color: #8e44ad;">📄 JSON Schema</a>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="stats-grid">
+            
+            <div class="stat-card card-mint">
+                <div class="stat-icon">📘</div>
+                <div class="stat-number">{{ stats.courses|default:0 }}</div>
+                <div class="stat-label">Mata Kuliah Aktif</div>
+            </div>
+            
+            <div class="stat-card card-blue">
+                <div class="stat-icon">👥</div>
+                <div class="stat-number">{{ stats.users|default:0 }}</div>
+                <div class="stat-label">Total Pengguna</div>
+            </div>
+            
+            <div class="stat-card card-yellow">
+                <div class="stat-icon">📝</div>
+                <div class="stat-number">{{ stats.members|default:0 }}</div>
+                <div class="stat-label">Total Pendaftaran</div>
+            </div>
+            
+            <div class="stat-card card-red">
+                <div class="stat-icon">🎬</div>
+                <div class="stat-number">{{ stats.content|default:0 }}</div>
+                <div class="stat-label">Total Konten</div>
+            </div>
+            
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="features-section">
+            <h2 style="color: var(--primary-color); margin-bottom: 50px;">Mengapa Memilih SimpleLMS?</h2>
+            
+            <div class="features-grid">
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🧠</div>
+                    <h4>Konten Terstruktur</h4>
+                    <p>Materi diajarkan secara step-by-step, cocok untuk pemula hingga tingkat lanjut.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">🔍</div>
+                    <h4>Analisis Performa</h4>
+                    <p>Didukung profiling (Silk) untuk memastikan performa website yang cepat dan optimal.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">👩‍🏫</div>
+                    <h4>Mentor Berpengalaman</h4>
+                    <p>Semua mata kuliah diampu oleh pengajar dengan ID yang terverifikasi.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">💻</div>
+                    <h4>Full-Stack Ready</h4>
+                    <p>Lingkungan Docker memudahkan setup dan deployment proyek Anda.</p>
+                </div>
+                
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>Pilihan Mata Kuliah Terbaik</h2>
+        <div class="course-grid">
+            {% for course in courses %}
+            <div class="course-card">
+                <div class="card-body">
+                    <h3>{{ course.name }}</h3>
+                    <p class="teacher">Oleh: {{ course.teacher.username }}</p>
+                    <p>{{ course.description|truncatechars:100 }}</p>
+                    
+                    <div class="price-info">
+                        <span class="price">Rp {{ course.price|intcomma }}</span>
+                        <span class="member-count">🧑‍🎓 {{ course.member_count }} Siswa</span>
+                    </div>
+                </div>
+            </div>
+            {% empty %}
+            <p style="text-align: center; font-style: italic;">Belum ada mata kuliah yang tersedia di database.</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="footer">
+        <div class="footer-content">
+            
+            <div class="footer-section">
+                <h4>SimpleLMS</h4>
+                <p>Platform belajar online yang fokus pada kualitas materi dan mentor.</p>
+            </div>
+            
+            <div class="footer-section">
+                <h4>Akses Cepat</h4>
+                <div class="footer-links">
+                    <a href="{% url 'admin:index' %}">Dashboard Admin</a>
+                    <a href="{% url 'api_all_courses' %}">Tabel Courses</a>
+                    <a href="{% url 'api_course_stats' %}">Statistik</a>
+                    <a href="/api/v2/docs">Docs API v2</a>
+                </div>
+            </div>
+
+            <div class="footer-section">
+                <h4>Kontak & Bantuan</h4>
+                <div class="footer-links">
+                    <p style="color: white;">Email: 111202314974@mhs.dinus.ac.id</p>
+                    <p style="color: white;">Telepon: +62 896 7644 0508</p>
+                </div>
+            </div>
+
+        </div>
+        <div class="copyright">
+            &copy; 2025 SimpleLMS by <b style="color: #1abc9c;">Rizal Ahmad Maulana</b>. All rights reserved. Dibuat dengan Django.
+        </div>
+    </div>
+</body>
+</html>

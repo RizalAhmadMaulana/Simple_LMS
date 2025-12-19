@@ -1,0 +1,6 @@
+course_id,user_id,roles
+1,2,std
+1,3,std
+2,4,std
+3,2,ast
+4,1,ast

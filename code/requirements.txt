@@ -1,0 +1,9 @@
+django
+psycopg2-binary
+Pillow
+django-silk
+django-ninja
+django-ninja-simple-jwt
+gunicorn
+whitenoise
+dj-database-url

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>User Courses</title>
+    <style>
+        body { font-family: sans-serif; padding: 30px; background: #f8f9fa; color: #34495e; }
+        h1 { color: #e67e22; border-bottom: 2px solid #e67e22; display: inline-block; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #2c3e50; color: white; }
+        tr:hover { background-color: #f1f1f1; }
+        .badge { padding: 5px 10px; border-radius: 15px; font-size: 0.8em; color: white; background: #95a5a6; }
+        .badge-std { background: #3498db; }
+        .badge-ins { background: #9b59b6; }
+        .btn-back { display: inline-block; margin-top: 20px; text-decoration: none; background: #34495e; color: white; padding: 10px 20px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>👥 Data User Courses</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Nama User</th>
+                <th>Course yang Diambil</th>
+                <th>Role</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for member in members %}
+            <tr>
+                <td>{{ member.id }}</td>
+                <td>{{ member.user_id.username }}</td>
+                <td>{{ member.course_id.name }}</td>
+                <td>
+                    <span class="badge {% if member.roles == 'std' %}badge-std{% else %}badge-ins{% endif %}">
+                        {{ member.roles|upper }}
+                    </span>
+                </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="4" style="text-align:center;">Belum ada data member.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <a href="{% url 'home' %}" class="btn-back">⬅ Kembali ke Dashboard</a>
+</body>
+</html>

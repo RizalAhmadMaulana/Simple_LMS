@@ -1,0 +1,41 @@
+{% load humanize %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Statistik Courses</title>
+    <style>
+        body { font-family: sans-serif; padding: 30px; background: #f8f9fa; text-align: center; }
+        h1 { color: #2980b9; margin-bottom: 40px; }
+        .grid { display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }
+        .card { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 200px; }
+        .card h3 { color: #7f8c8d; font-size: 1em; margin-bottom: 10px; }
+        .card p { font-size: 1.5em; font-weight: bold; color: #2c3e50; margin: 0; }
+        .btn-back { display: inline-block; margin-top: 40px; text-decoration: none; background: #34495e; color: white; padding: 10px 20px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>📊 Statistik Course</h1>
+    
+    <div class="grid">
+        <div class="card" style="border-bottom: 5px solid #3498db;">
+            <h3>Total Course</h3>
+            <p>{{ stats.total_courses }}</p>
+        </div>
+        <div class="card" style="border-bottom: 5px solid #2ecc71;">
+            <h3>Harga Rata-rata</h3>
+            <p>Rp {{ stats.avg_price|intcomma }}</p>
+        </div>
+        <div class="card" style="border-bottom: 5px solid #e74c3c;">
+            <h3>Harga Termahal</h3>
+            <p>Rp {{ stats.max_price|intcomma }}</p>
+        </div>
+        <div class="card" style="border-bottom: 5px solid #f1c40f;">
+            <h3>Harga Termurah</h3>
+            <p>Rp {{ stats.min_price|intcomma }}</p>
+        </div>
+    </div>
+
+    <a href="{% url 'home' %}" class="btn-back">⬅ Kembali ke Dashboard</a>
+</body>
+</html>
