@@ -15,7 +15,7 @@ from django.contrib.auth.models import User
 from core.models import Course, CourseMember 
 
 # Path folder CSV di dalam kontainer
-CSV_DIR = '/code/csv_data/'
+CSV_DIR = '../csv_data/'
 
 # --- FUNGSI HELPER UNTUK RESET SEQUENCE ---
 def reset_db_sequences():
