@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'django.contrib.humanize',
     'silk',
     'ninja_simple_jwt',
+    'core',
 ]
 
 MIDDLEWARE = [
