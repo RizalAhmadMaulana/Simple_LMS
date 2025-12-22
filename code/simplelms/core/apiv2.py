@@ -46,9 +46,15 @@ class CustomPagination(PaginationBase):
     def paginate_queryset(self, queryset, pagination: Input, **params):
         skip = pagination.skip
         limit = pagination.limit
+        
+        if isinstance(queryset, list):
+            total = len(queryset)
+        else:
+            total = queryset.count()
+            
         return {
             "items": queryset[skip : skip + limit],
-            "total": queryset.count(),
+            "total": total,
             "per_page": limit,
         }
 
@@ -86,6 +92,7 @@ def my_courses(request):
     user_id = request.user.id
     qs = CourseMember.objects.filter(user_id=user_id).select_related("course_id")
 
+    # Mapping ke List of Dict untuk menghindari error Pydantic Integer 
     results = []
     for member in qs:
         results.append({
