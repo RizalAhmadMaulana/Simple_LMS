@@ -126,27 +126,43 @@ def enroll_course(request, id: int):
     }
 
 # 4. Post comment
-@api_v2.post("/comments/", response=SuccessOut, auth=apiAuth)
+@api_v2.post("/comments/", response=SuccessOut, auth=apiAuth) 
 def post_comment(request, data: CommentIn):
     user = request.user
     content = CourseContent.objects.filter(pk=data.content_id).first()
     if not content:
         return {"success": False, "comment_id": None, "error": "Content not found"}
 
-    # Pastikan user ikut course
-    member = CourseMember.objects.filter(user_id=user, course_id=content.course_id)
-    if not member.exists():
+    member_qs = CourseMember.objects.filter(user_id=user, course_id=content.course_id)
+    
+    if not member_qs.exists():
         return {"success": False, "comment_id": None, "error": "Tidak boleh komentar di sini"}
 
-    comment = Comment.objects.create(comment=data.comment, user_id=user, content_id=content)
+    member_obj = member_qs.first()
+ 
+    comment = Comment.objects.create(
+        comment=data.comment, 
+        member_id=member_obj, 
+        content_id=content
+    )
+    
     return {"success": True, "comment_id": comment.id}
 
 # 5. List comments for a content (paginated)
 @api_v2.get("/content/{id}/comments/", response=List[CommentOut])
 @paginate(CustomPagination)
 def list_comments(request, id: int):
-    qs = Comment.objects.filter(content_id=id)
-    return qs
+    qs = Comment.objects.filter(content_id=id).select_related("member_id__user_id")
+    
+    results = []
+    for item in qs:
+        results.append({
+            "id": item.id,
+            "comment": item.comment,
+            "user_id": item.member_id.user_id.id, 
+            "content_id": id
+        })
+    return results
 
 # 6. List Courses (Filtering & Sorting)
 @api_v2.get("/courses", response=List[CourseSchema])
