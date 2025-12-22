@@ -5,3 +5,8 @@ class CourseSchema(Schema):
     name: str
     description: str
     price: int
+
+class CourseMemberOut(Schema):
+    id: int
+    user_id: int   
+    course_id: int  

@@ -1,12 +1,12 @@
-# File: docker_django/code/simplelms/core/apiv2.py
-
 from typing import Any, List, Optional
 from ninja import NinjaAPI, Schema, Query
 from ninja.pagination import PaginationBase, paginate
 from ninja_simple_jwt.auth.views.api import mobile_auth_router
 from .models import User, Course, CourseMember, CourseContent, Comment
 from .throttling import SimpleRateThrottle
-from .apiv2_schemas import CourseSchema
+from .apiv2_schemas import CourseSchema, CourseMemberOut
+from django.shortcuts import get_object_or_404
+from ninja.errors import HttpError
 
 # ======================
 # Response Schemas
@@ -15,11 +15,6 @@ class UserOut(Schema):
     id: int
     username: str
     email: str
-
-class CourseMemberOut(Schema):
-    id: int
-    user_id: int
-    course_id: int
 
 class CommentOut(Schema):
     id: int
@@ -63,8 +58,8 @@ class CustomPagination(PaginationBase):
 api_v2 = NinjaAPI(
     title="SimpleLMS API v2",
     version="2.0.0",
-    throttle=SimpleRateThrottle(),   # <--- Throttling Aktif Global
-    urls_namespace="api_v2" # Penting agar tidak bentrok dengan v1
+    throttle=SimpleRateThrottle(),
+    urls_namespace="api_v2"
 )
 
 # JWT auth router
@@ -95,14 +90,24 @@ def my_courses(request):
 # 3. Enroll course
 @api_v2.post("/course/{id}/enroll/", response=CourseMemberOut, auth=apiAuth)
 def enroll_course(request, id: int):
-    user = request.user
+    user_id = request.user.id
+    user_obj = User.objects.get(pk=user_id)
+
     try:
-        course = Course.objects.get(pk=id)
+        course_obj = Course.objects.get(pk=id)
     except Course.DoesNotExist:
-        return {"error": "Course not found"}
-    
-    enrollment, created = CourseMember.objects.get_or_create(user_id=user, course_id=course)
-    return enrollment
+        raise HttpError(404, "Course tidak ditemukan")
+
+    if CourseMember.objects.filter(user_id=user_obj, course_id=course_obj).exists():
+        raise HttpError(400, "Kamu sudah terdaftar di course ini!")
+
+    enrollment = CourseMember.objects.create(user_id=user_obj, course_id=course_obj)
+
+    return {
+        "id": enrollment.id,
+        "user_id": user_obj.id,   
+        "course_id": course_obj.id  
+    }
 
 # 4. Post comment
 @api_v2.post("/comments/", response=SuccessOut, auth=apiAuth)

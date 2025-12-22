@@ -71,10 +71,6 @@ class UserOut(Schema):
 
 @apiv1.post('register/', response=UserOut)
 def register(request, data:Register):
-    """Endpoint untuk registrasi pengguna dengan validasi inputan:
-    - username: minimal terdiri dari 5 karakter
-    - password: minimal terdiri dari 8 karakter dan harus mengandung huruf dan angka
-    """
     newUser = User.objects.create_user(username=data.username, 
                                 password=data.password, 
                                 email=data.email,
