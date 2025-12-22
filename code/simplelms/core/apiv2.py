@@ -84,8 +84,17 @@ def list_users(request, search: Optional[str] = None):
 @paginate(CustomPagination)
 def my_courses(request):
     user_id = request.user.id
-    qs = CourseMember.objects.filter(user_id=user_id).select_related("course_id", "user_id")
-    return qs
+    qs = CourseMember.objects.filter(user_id=user_id).select_related("course_id")
+
+    results = []
+    for member in qs:
+        results.append({
+            "id": member.id,
+            "user_id": user_id,            
+            "course_id": member.course_id.id 
+        })
+    
+    return results
 
 # 3. Enroll course
 @api_v2.post("/course/{id}/enroll/", response=CourseMemberOut, auth=apiAuth)
