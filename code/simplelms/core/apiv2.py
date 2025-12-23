@@ -4,7 +4,6 @@ import os
 from typing import Any, List, Optional
 from ninja import NinjaAPI, Schema, Query
 from ninja.pagination import PaginationBase, paginate
-from ninja_simple_jwt.auth.views.api import mobile_auth_router
 from ninja.security import HttpBearer
 from django.conf import settings
 from django.shortcuts import get_object_or_404
@@ -15,53 +14,71 @@ from .throttling import SimpleRateThrottle
 from .apiv2_schemas import CourseSchema, CourseMemberOut
 
 # ==========================================
-# 1. AUTHENTICATION HELPERS (KUNCI PASTI SAMA)
+# 1. AUTHENTICATION LOGIC (HYBRID & TOLERANT)
 # ==========================================
-def get_exact_key():
-    """
-    Satu fungsi pusat untuk mengambil Kunci.
-    Memastikan Create Token & Verify Token selalu pakai kunci yang sama.
-    """
-    priv_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pem')
-    pub_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pub')
-    
-    # Prioritas 1: RSA Keys (untuk Docker/Prod)
-    if os.path.exists(priv_path) and os.path.exists(pub_path):
-        with open(priv_path, 'rb') as f: priv = f.read()
-        with open(pub_path, 'rb') as f: pub = f.read()
-        return priv, pub, "RS256"
-    
-    # Prioritas 2: Secret Key (untuk Lokal/Test)
-    return settings.SECRET_KEY, settings.SECRET_KEY, "HS256"
 
-def create_access_token(user_id):
-    priv_key, _, algo = get_exact_key()
-    payload = {
+def get_rsa_keys():
+    """Mencoba load RSA Keys"""
+    priv, pub = None, None
+    try:
+        priv_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pem')
+        pub_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pub')
+        if os.path.exists(priv_path):
+            with open(priv_path, 'rb') as f: priv = f.read()
+        if os.path.exists(pub_path):
+            with open(pub_path, 'rb') as f: pub = f.read()
+    except:
+        pass
+    return priv, pub
+
+def create_token_pair(user_id):
+    """Membuat token manual (Pengganti Library)"""
+    priv_key, _ = get_rsa_keys()
+    
+    # Pilih Key & Algoritma
+    key = priv_key if priv_key else settings.SECRET_KEY
+    algo = "RS256" if priv_key else "HS256"
+
+    payload_access = {
         "user_id": user_id,
         "exp": datetime.datetime.utcnow() + datetime.timedelta(days=1),
         "type": "access"
     }
-    token = jwt.encode(payload, priv_key, algorithm=algo)
-    if isinstance(token, bytes): token = token.decode('utf-8')
-    return token
+    payload_refresh = {
+        "user_id": user_id,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7),
+        "type": "refresh"
+    }
+
+    access = jwt.encode(payload_access, key, algorithm=algo)
+    refresh = jwt.encode(payload_refresh, key, algorithm=algo)
+    
+    if isinstance(access, bytes): access = access.decode('utf-8')
+    if isinstance(refresh, bytes): refresh = refresh.decode('utf-8')
+    
+    return access, refresh
 
 class CustomJwtAuth(HttpBearer):
     def authenticate(self, request, token):
-        # Bersihkan "Bearer " agar Test & Swagger sama-sama bisa masuk
+        # 1. Bersihkan prefix "Bearer " (Biar Swagger & Test sama-sama jalan)
         if token.lower().startswith("bearer "):
             token = token.split(" ")[1]
 
-        _, pub_key, algo = get_exact_key()
-        
-        try:
-            # Decode dengan kunci yang PASTI cocok
-            payload = jwt.decode(token, pub_key, algorithms=[algo])
-            
-            if payload.get("type") == "access":
-                user_id = payload.get("user_id")
-                return User.objects.get(pk=user_id)
-        except:
-            return None
+        # 2. Siapkan Kandidat Key (Coba RSA dulu, kalau gagal coba Secret)
+        _, pub_key = get_rsa_keys()
+        candidates = []
+        if pub_key: candidates.append({"key": pub_key, "algo": "RS256"})
+        candidates.append({"key": settings.SECRET_KEY, "algo": "HS256"})
+
+        # 3. Coba Decode
+        for opt in candidates:
+            try:
+                payload = jwt.decode(token, opt["key"], algorithms=[opt["algo"]])
+                if payload.get("type") == "access":
+                    user_id = payload.get("user_id")
+                    return User.objects.get(pk=user_id)
+            except:
+                continue
         return None
 
 # Gunakan Custom Auth ini
@@ -80,13 +97,16 @@ api_v2 = NinjaAPI(
 # ==========================================
 # 3. SCHEMAS
 # ==========================================
-# Kita buat Schema Login sendiri agar tidak bergantung pada library yang error
-class ManualLoginSchema(Schema):
+class MobileSignInSchema(Schema):
     username: str
     password: str
 
+class MobileRefreshSchema(Schema):
+    refresh: str
+
 class TokenResponseSchema(Schema):
     access: str
+    refresh: str
 
 class UserOut(Schema):
     id: int
@@ -121,23 +141,45 @@ class CustomPagination(PaginationBase):
         return {"items": queryset[skip : skip + limit], "total": total, "per_page": limit}
 
 # ==========================================
-# 4. ENDPOINTS
+# 4. AUTH ENDPOINTS (INI YANG BIKIN MUNCUL DI DOCS)
 # ==========================================
 
-# Endpoint Login Manual (PENGGANTI ROUTER YANG ERROR)
-# Ini yang bikin Test & Endpoint Manual jalan dua-duanya
 @api_v2.post("/auth/sign-in", response=TokenResponseSchema, auth=None)
-def sign_in(request, data: ManualLoginSchema):
+def mobile_sign_in(request, data: MobileSignInSchema):
+    """Endpoint Login Manual untuk Mobile/Docs"""
     user = authenticate(username=data.username, password=data.password)
     if not user:
         raise HttpError(401, "Username atau password salah")
     
-    token = create_access_token(user.id)
-    return {"access": token}
+    access, refresh = create_token_pair(user.id)
+    return {"access": access, "refresh": refresh}
 
-# ---
-# ENDPOINTS LAIN (Tetap sama, cuma pakai apiAuth & request.auth)
-# ---
+@api_v2.post("/auth/token-refresh", response=TokenResponseSchema, auth=None)
+def mobile_token_refresh(request, data: MobileRefreshSchema):
+    """Endpoint Refresh Token Manual"""
+    _, pub_key = get_rsa_keys()
+    candidates = []
+    if pub_key: candidates.append({"key": pub_key, "algo": "RS256"})
+    candidates.append({"key": settings.SECRET_KEY, "algo": "HS256"})
+
+    user_id = None
+    for opt in candidates:
+        try:
+            payload = jwt.decode(data.refresh, opt["key"], algorithms=[opt["algo"]])
+            if payload.get("type") == "refresh":
+                user_id = payload.get("user_id")
+                break
+        except: pass
+
+    if not user_id:
+        raise HttpError(401, "Refresh token tidak valid")
+
+    access, refresh = create_token_pair(user_id)
+    return {"access": access, "refresh": refresh}
+
+# ==========================================
+# 5. BUSINESS ENDPOINTS
+# ==========================================
 
 @api_v2.get("/users", response=List[UserOut])
 @paginate(CustomPagination)
@@ -149,7 +191,7 @@ def list_users(request, search: Optional[str] = None):
 @api_v2.get("/mycourses/", response=List[CourseMemberOut], auth=apiAuth)
 @paginate(CustomPagination)
 def my_courses(request):
-    user = request.auth # Pasti terisi User object
+    user = request.auth
     if not user: raise HttpError(401, "Unauthorized")
     
     qs = CourseMember.objects.filter(user_id=user)
@@ -184,7 +226,7 @@ def post_comment(request, data: CommentIn):
 
     member_qs = CourseMember.objects.filter(user_id=user, course_id=content.course_id)
     if not member_qs.exists():
-        raise HttpError(400, "Tidak boleh komentar di sini")
+        raise HttpError(400, "Tidak boleh komentar di sini (Belum Enroll)")
 
     comment = Comment.objects.create(
         comment=data.comment, 
