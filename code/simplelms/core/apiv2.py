@@ -14,29 +14,28 @@ from .throttling import SimpleRateThrottle
 from .apiv2_schemas import CourseSchema, CourseMemberOut
 
 # ==========================================
-# 1. HYBRID AUTHENTICATION (ANTI 401)
+# 1. UNIVERSAL AUTHENTICATION (DEBUG MODE)
 # ==========================================
+
 def get_rsa_keys():
-    """Mencoba membaca kunci RSA jika ada"""
+    """Membaca kunci RSA jika tersedia"""
+    priv, pub = None, None
     try:
-        private_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pem')
-        public_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pub')
+        priv_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pem')
+        pub_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pub')
         
-        priv, pub = None, None
-        if os.path.exists(private_path):
-            with open(private_path, 'rb') as f: priv = f.read()
-        if os.path.exists(public_path):
-            with open(public_path, 'rb') as f: pub = f.read()
-            
-        return priv, pub
-    except:
-        return None, None
+        if os.path.exists(priv_path):
+            with open(priv_path, 'rb') as f: priv = f.read()
+        if os.path.exists(pub_path):
+            with open(pub_path, 'rb') as f: pub = f.read()
+    except Exception as e:
+        print(f"[KEY LOAD ERROR] {e}")
+    return priv, pub
 
 def create_token_pair(user_id):
-    """Membuat token, prioritas pakai RSA, fallback ke SECRET_KEY"""
+    """Membuat token (Prioritas RSA, Fallback HS256)"""
     priv_key, _ = get_rsa_keys()
     
-    # Tentukan Key dan Algo untuk ENCODE
     if priv_key:
         key = priv_key
         algo = "RS256"
@@ -44,7 +43,7 @@ def create_token_pair(user_id):
         key = settings.SECRET_KEY
         algo = "HS256"
 
-    # Buat Payload
+    # Payload
     payload_access = {
         "user_id": user_id,
         "exp": datetime.datetime.utcnow() + datetime.timedelta(days=1),
@@ -56,47 +55,65 @@ def create_token_pair(user_id):
         "type": "refresh"
     }
 
-    access_token = jwt.encode(payload_access, key, algorithm=algo)
-    refresh_token = jwt.encode(payload_refresh, key, algorithm=algo)
-
-    # Convert bytes to string (untuk kompatibilitas)
-    if isinstance(access_token, bytes): access_token = access_token.decode('utf-8')
-    if isinstance(refresh_token, bytes): refresh_token = refresh_token.decode('utf-8')
+    # Encode
+    access = jwt.encode(payload_access, key, algorithm=algo)
+    refresh = jwt.encode(payload_refresh, key, algorithm=algo)
     
-    return access_token, refresh_token
+    # Ensure String
+    if isinstance(access, bytes): access = access.decode('utf-8')
+    if isinstance(refresh, bytes): refresh = refresh.decode('utf-8')
+    
+    return access, refresh
 
 class CustomJwtAuth(HttpBearer):
     def authenticate(self, request, token):
+        # 1. Siapkan Kandidat Key
         _, pub_key = get_rsa_keys()
         
-        # --- PERCOBAAN 1: Validasi pakai RSA (RS256) ---
+        candidates = []
+        # Opsi A: Pakai RSA Public Key (RS256)
         if pub_key:
-            user = self.try_decode(token, pub_key, "RS256")
-            if user: return user
-
-        # --- PERCOBAAN 2: Validasi pakai SECRET_KEY (HS256) ---
-        # Ini penting kalau RSA gagal atau tidak ada
-        user = self.try_decode(token, settings.SECRET_KEY, "HS256")
-        if user: return user
+            candidates.append({"key": pub_key, "algo": "RS256", "name": "RSA Public Key"})
         
-        # Kalau dua-duanya gagal, berarti emang 401
+        # Opsi B: Pakai Django Secret Key (HS256) -> Jaga-jaga kalau RSA gagal/tidak ada
+        candidates.append({"key": settings.SECRET_KEY, "algo": "HS256", "name": "Django Secret"})
+
+        # 2. Coba Decode satu per satu
+        for opt in candidates:
+            try:
+                payload = jwt.decode(token, opt["key"], algorithms=[opt["algo"]])
+                
+                # Cek Tipe Token
+                if payload.get("type") != "access":
+                    print(f"[AUTH FAIL] Token tipe '{payload.get('type')}' bukan 'access' (via {opt['name']})")
+                    continue # Coba key berikutnya
+
+                user_id = payload.get("user_id")
+                user = User.objects.get(pk=user_id)
+                
+                # BERHASIL!
+                # print(f"[AUTH SUCCESS] User {user.username} via {opt['name']}")
+                return user
+
+            except jwt.ExpiredSignatureError:
+                print(f"[AUTH FAIL] Token Expired via {opt['name']}")
+            except jwt.DecodeError:
+                # Ini wajar jika kita mencoba Key yang salah (misal coba RSA padahal token HS256)
+                # print(f"[AUTH INFO] Gagal decode via {opt['name']} (mungkin beda key)")
+                pass
+            except User.DoesNotExist:
+                print(f"[AUTH FAIL] User ID {payload.get('user_id')} tidak ditemukan di DB")
+            except Exception as e:
+                print(f"[AUTH ERROR] Error via {opt['name']}: {e}")
+
+        # Jika semua loop selesai dan tidak ada return, berarti GAGAL TOTAL
+        print("[AUTH FINAL] Token ditolak oleh semua metode.")
         return None
 
-    def try_decode(self, token, key, algo):
-        try:
-            payload = jwt.decode(token, key, algorithms=[algo])
-            if payload.get("type") != "access":
-                return None
-            user_id = payload.get("user_id")
-            return User.objects.get(pk=user_id)
-        except:
-            return None
-
-# Instansiasi Auth
 apiAuth = CustomJwtAuth()
 
 # ==========================================
-# 2. NINJA API INSTANCE
+# 2. NINJA API SETUP
 # ==========================================
 api_v2 = NinjaAPI(
     title="SimpleLMS API v2",
@@ -167,22 +184,20 @@ def mobile_sign_in(request, data: MobileSignInSchema):
 
 @api_v2.post("/auth/token-refresh", response=TokenResponseSchema, auth=None)
 def mobile_token_refresh(request, data: MobileRefreshSchema):
-    # Coba decode refresh token dengan strategi hybrid juga
+    # Coba decode refresh token (Hybrid Check)
     user_id = None
     _, pub_key = get_rsa_keys()
     
-    # Coba RS256
-    if pub_key:
+    candidates = []
+    if pub_key: candidates.append({"key": pub_key, "algo": "RS256"})
+    candidates.append({"key": settings.SECRET_KEY, "algo": "HS256"})
+
+    for opt in candidates:
         try:
-            payload = jwt.decode(data.refresh, pub_key, algorithms=["RS256"])
-            if payload.get("type") == "refresh": user_id = payload.get("user_id")
-        except: pass
-    
-    # Coba HS256 jika belum dapat
-    if not user_id:
-        try:
-            payload = jwt.decode(data.refresh, settings.SECRET_KEY, algorithms=["HS256"])
-            if payload.get("type") == "refresh": user_id = payload.get("user_id")
+            payload = jwt.decode(data.refresh, opt["key"], algorithms=[opt["algo"]])
+            if payload.get("type") == "refresh":
+                user_id = payload.get("user_id")
+                break
         except: pass
 
     if not user_id:
@@ -198,15 +213,14 @@ def list_users(request, search: Optional[str] = None):
     if search: qs = qs.filter(username__icontains=search)
     return qs
 
-# --- PROTECTED ENDPOINTS (FIXED) ---
-
+# --- PROTECTED (FIXED) ---
 @api_v2.get("/mycourses/", response=List[CourseMemberOut], auth=apiAuth)
 @paginate(CustomPagination)
 def my_courses(request):
     user = request.auth
-    if not user: raise HttpError(401, "Unauthorized: Token Invalid")
+    if not user: raise HttpError(401, "Unauthorized")
     
-    # Filter menggunakan objek user yang didapat dari auth
+    # Ambil data CourseMember berdasarkan user yang login
     qs = CourseMember.objects.filter(user_id=user)
     
     results = []
@@ -221,7 +235,7 @@ def my_courses(request):
 @api_v2.post("/course/{id}/enroll/", response=CourseMemberOut, auth=apiAuth)
 def enroll_course(request, id: int):
     user = request.auth
-    if not user: raise HttpError(401, "Unauthorized: Token Invalid")
+    if not user: raise HttpError(401, "Unauthorized")
 
     try:
         course_obj = Course.objects.get(pk=id)
@@ -237,7 +251,7 @@ def enroll_course(request, id: int):
 @api_v2.post("/comments/", response=SuccessOut, auth=apiAuth) 
 def post_comment(request, data: CommentIn):
     user = request.auth
-    if not user: raise HttpError(401, "Unauthorized: Token Invalid")
+    if not user: raise HttpError(401, "Unauthorized")
 
     try:
         content = CourseContent.objects.get(pk=data.content_id)
@@ -255,8 +269,7 @@ def post_comment(request, data: CommentIn):
     )
     return {"success": True, "comment_id": comment.id}
 
-# --- PUBLIC ENDPOINTS ---
-
+# --- PUBLIC ---
 @api_v2.get("/content/{id}/comments/", response=List[CommentOut])
 @paginate(CustomPagination)
 def list_comments(request, id: int):
