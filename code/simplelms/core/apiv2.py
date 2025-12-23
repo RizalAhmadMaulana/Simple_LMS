@@ -14,66 +14,90 @@ from .throttling import SimpleRateThrottle
 from .apiv2_schemas import CourseSchema, CourseMemberOut
 
 # ==========================================
-# 1. HELPER FUNCTIONS & AUTH
+# 1. HYBRID AUTHENTICATION (ANTI 401)
 # ==========================================
-def get_signing_key(access=True):
-    filename = 'jwt-signing.pem'
-    algorithm = "RS256"
-    key_path = os.path.join(settings.BASE_DIR, filename)
-    if os.path.exists(key_path):
-        with open(key_path, 'rb') as f:
-            return f.read(), algorithm
-    else:
-        return settings.SECRET_KEY, "HS256"
-
-def get_verification_key():
-    filename = 'jwt-signing.pub'
-    algorithm = "RS256"
-    key_path = os.path.join(settings.BASE_DIR, filename)
-    if os.path.exists(key_path):
-        with open(key_path, 'rb') as f:
-            return f.read(), algorithm
-    else:
-        return settings.SECRET_KEY, "HS256"
+def get_rsa_keys():
+    """Mencoba membaca kunci RSA jika ada"""
+    try:
+        private_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pem')
+        public_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pub')
+        
+        priv, pub = None, None
+        if os.path.exists(private_path):
+            with open(private_path, 'rb') as f: priv = f.read()
+        if os.path.exists(public_path):
+            with open(public_path, 'rb') as f: pub = f.read()
+            
+        return priv, pub
+    except:
+        return None, None
 
 def create_token_pair(user_id):
-    key, algo = get_signing_key()
+    """Membuat token, prioritas pakai RSA, fallback ke SECRET_KEY"""
+    priv_key, _ = get_rsa_keys()
     
-    access_payload = {
+    # Tentukan Key dan Algo untuk ENCODE
+    if priv_key:
+        key = priv_key
+        algo = "RS256"
+    else:
+        key = settings.SECRET_KEY
+        algo = "HS256"
+
+    # Buat Payload
+    payload_access = {
         "user_id": user_id,
         "exp": datetime.datetime.utcnow() + datetime.timedelta(days=1),
-        "iat": datetime.datetime.utcnow(),
         "type": "access"
     }
-    access_token = jwt.encode(access_payload, key, algorithm=algo)
-    
-    refresh_payload = {
+    payload_refresh = {
         "user_id": user_id,
         "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7),
-        "iat": datetime.datetime.utcnow(),
         "type": "refresh"
     }
-    refresh_token = jwt.encode(refresh_payload, key, algorithm=algo)
 
+    access_token = jwt.encode(payload_access, key, algorithm=algo)
+    refresh_token = jwt.encode(payload_refresh, key, algorithm=algo)
+
+    # Convert bytes to string (untuk kompatibilitas)
     if isinstance(access_token, bytes): access_token = access_token.decode('utf-8')
     if isinstance(refresh_token, bytes): refresh_token = refresh_token.decode('utf-8')
+    
     return access_token, refresh_token
 
 class CustomJwtAuth(HttpBearer):
     def authenticate(self, request, token):
+        _, pub_key = get_rsa_keys()
+        
+        # --- PERCOBAAN 1: Validasi pakai RSA (RS256) ---
+        if pub_key:
+            user = self.try_decode(token, pub_key, "RS256")
+            if user: return user
+
+        # --- PERCOBAAN 2: Validasi pakai SECRET_KEY (HS256) ---
+        # Ini penting kalau RSA gagal atau tidak ada
+        user = self.try_decode(token, settings.SECRET_KEY, "HS256")
+        if user: return user
+        
+        # Kalau dua-duanya gagal, berarti emang 401
+        return None
+
+    def try_decode(self, token, key, algo):
         try:
-            key, algo = get_verification_key()
             payload = jwt.decode(token, key, algorithms=[algo])
             if payload.get("type") != "access":
                 return None
             user_id = payload.get("user_id")
-            if user_id:
-                return User.objects.get(pk=user_id)
-        except Exception:
+            return User.objects.get(pk=user_id)
+        except:
             return None
 
+# Instansiasi Auth
 apiAuth = CustomJwtAuth()
 
+# ==========================================
+# 2. NINJA API INSTANCE
+# ==========================================
 api_v2 = NinjaAPI(
     title="SimpleLMS API v2",
     version="2.0.0",
@@ -82,7 +106,7 @@ api_v2 = NinjaAPI(
 )
 
 # ==========================================
-# 2. SCHEMAS
+# 3. SCHEMAS
 # ==========================================
 class MobileSignInSchema(Schema):
     username: str
@@ -128,28 +152,44 @@ class CustomPagination(PaginationBase):
         return {"items": queryset[skip : skip + limit], "total": total, "per_page": limit}
 
 # ==========================================
-# 3. ENDPOINTS (FIXED MYCOURSES & ENROLL)
+# 4. ENDPOINTS
 # ==========================================
 
+# --- AUTH ---
 @api_v2.post("/auth/sign-in", response=TokenResponseSchema, auth=None)
 def mobile_sign_in(request, data: MobileSignInSchema):
     user = authenticate(username=data.username, password=data.password)
     if not user:
         raise HttpError(401, "Username atau password salah")
+    
     access, refresh = create_token_pair(user.id)
     return {"access": access, "refresh": refresh}
 
 @api_v2.post("/auth/token-refresh", response=TokenResponseSchema, auth=None)
 def mobile_token_refresh(request, data: MobileRefreshSchema):
-    try:
-        key, algo = get_verification_key()
-        payload = jwt.decode(data.refresh, key, algorithms=[algo])
-        if payload.get("type") != "refresh":
-            raise HttpError(400, "Token tidak valid")
-        access, refresh = create_token_pair(payload.get("user_id"))
-        return {"access": access, "refresh": refresh}
-    except Exception:
-        raise HttpError(401, "Refresh token expired/invalid")
+    # Coba decode refresh token dengan strategi hybrid juga
+    user_id = None
+    _, pub_key = get_rsa_keys()
+    
+    # Coba RS256
+    if pub_key:
+        try:
+            payload = jwt.decode(data.refresh, pub_key, algorithms=["RS256"])
+            if payload.get("type") == "refresh": user_id = payload.get("user_id")
+        except: pass
+    
+    # Coba HS256 jika belum dapat
+    if not user_id:
+        try:
+            payload = jwt.decode(data.refresh, settings.SECRET_KEY, algorithms=["HS256"])
+            if payload.get("type") == "refresh": user_id = payload.get("user_id")
+        except: pass
+
+    if not user_id:
+        raise HttpError(401, "Refresh token tidak valid atau expired")
+
+    access, refresh = create_token_pair(user_id)
+    return {"access": access, "refresh": refresh}
 
 @api_v2.get("/users", response=List[UserOut])
 @paginate(CustomPagination)
@@ -158,15 +198,15 @@ def list_users(request, search: Optional[str] = None):
     if search: qs = qs.filter(username__icontains=search)
     return qs
 
-# === FIX 1: MY COURSES ===
+# --- PROTECTED ENDPOINTS (FIXED) ---
+
 @api_v2.get("/mycourses/", response=List[CourseMemberOut], auth=apiAuth)
 @paginate(CustomPagination)
 def my_courses(request):
     user = request.auth
-    if not user: raise HttpError(401, "Unauthorized")
+    if not user: raise HttpError(401, "Unauthorized: Token Invalid")
     
-    # Gunakan 'user_id' (nama field di model) untuk filter
-    # Tapi kita ambil 'course_id_id' (raw integer) untuk response agar lebih cepat
+    # Filter menggunakan objek user yang didapat dari auth
     qs = CourseMember.objects.filter(user_id=user)
     
     results = []
@@ -174,51 +214,39 @@ def my_courses(request):
         results.append({
             "id": member.id,
             "user_id": user.id,            
-            "course_id": member.course_id_id # <--- Pakai _id agar tidak query ulang
+            "course_id": member.course_id_id 
         })
     return results
 
-# === FIX 2: ENROLL COURSE ===
 @api_v2.post("/course/{id}/enroll/", response=CourseMemberOut, auth=apiAuth)
 def enroll_course(request, id: int):
     user = request.auth
-    if not user: raise HttpError(401, "Unauthorized")
+    if not user: raise HttpError(401, "Unauthorized: Token Invalid")
 
     try:
         course_obj = Course.objects.get(pk=id)
     except Course.DoesNotExist:
         raise HttpError(404, "Course tidak ditemukan")
 
-    # Cek duplikasi dengan filter object langsung
     if CourseMember.objects.filter(user_id=user, course_id=course_obj).exists():
         raise HttpError(400, "Kamu sudah terdaftar di course ini!")
 
-    # Buat enrollment baru
-    enrollment = CourseMember.objects.create(
-        user_id=user,      # Pass User Object
-        course_id=course_obj # Pass Course Object
-    )
-
-    return {
-        "id": enrollment.id,
-        "user_id": user.id,   
-        "course_id": course_obj.id  
-    }
+    enrollment = CourseMember.objects.create(user_id=user, course_id=course_obj)
+    return {"id": enrollment.id, "user_id": user.id, "course_id": course_obj.id}
 
 @api_v2.post("/comments/", response=SuccessOut, auth=apiAuth) 
 def post_comment(request, data: CommentIn):
     user = request.auth
-    if not user: raise HttpError(401, "Unauthorized")
+    if not user: raise HttpError(401, "Unauthorized: Token Invalid")
 
     try:
         content = CourseContent.objects.get(pk=data.content_id)
     except CourseContent.DoesNotExist:
         raise HttpError(404, "Konten tidak ditemukan")
 
-    # Cek member akses
     member_qs = CourseMember.objects.filter(user_id=user, course_id=content.course_id)
     if not member_qs.exists():
-        raise HttpError(400, "Tidak boleh komentar di sini (belum enroll)")
+        raise HttpError(400, "Tidak boleh komentar di sini (Belum Enroll)")
 
     comment = Comment.objects.create(
         comment=data.comment, 
@@ -227,16 +255,14 @@ def post_comment(request, data: CommentIn):
     )
     return {"success": True, "comment_id": comment.id}
 
+# --- PUBLIC ENDPOINTS ---
+
 @api_v2.get("/content/{id}/comments/", response=List[CommentOut])
 @paginate(CustomPagination)
 def list_comments(request, id: int):
     qs = Comment.objects.filter(content_id=id).select_related("member_id__user_id")
     results = []
     for item in qs:
-        # Akses user_id melalui relasi member_id -> user_id
-        # Perhatikan: item.member_id adalah object CourseMember
-        # item.member_id.user_id adalah object User (karena nama fieldnya user_id)
-        # item.member_id.user_id.id adalah integer ID User
         results.append({
             "id": item.id,
             "comment": item.comment,
