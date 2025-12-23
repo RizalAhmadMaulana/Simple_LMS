@@ -14,36 +14,31 @@ from .throttling import SimpleRateThrottle
 from .apiv2_schemas import CourseSchema, CourseMemberOut
 
 # ==========================================
-# 1. UNIVERSAL AUTHENTICATION (DEBUG MODE)
+# 1. AUTHENTICATION LOGIC (HYBRID & TOLERANT)
 # ==========================================
 
 def get_rsa_keys():
-    """Membaca kunci RSA jika tersedia"""
+    """Mencoba load RSA Keys"""
     priv, pub = None, None
     try:
         priv_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pem')
         pub_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pub')
-        
         if os.path.exists(priv_path):
             with open(priv_path, 'rb') as f: priv = f.read()
         if os.path.exists(pub_path):
             with open(pub_path, 'rb') as f: pub = f.read()
-    except Exception as e:
-        print(f"[KEY LOAD ERROR] {e}")
+    except:
+        pass
     return priv, pub
 
 def create_token_pair(user_id):
-    """Membuat token (Prioritas RSA, Fallback HS256)"""
+    """Membuat token (Prioritas RSA, Fallback ke SECRET_KEY)"""
     priv_key, _ = get_rsa_keys()
     
-    if priv_key:
-        key = priv_key
-        algo = "RS256"
-    else:
-        key = settings.SECRET_KEY
-        algo = "HS256"
+    # Pilih Key & Algoritma
+    key = priv_key if priv_key else settings.SECRET_KEY
+    algo = "RS256" if priv_key else "HS256"
 
-    # Payload
     payload_access = {
         "user_id": user_id,
         "exp": datetime.datetime.utcnow() + datetime.timedelta(days=1),
@@ -55,11 +50,9 @@ def create_token_pair(user_id):
         "type": "refresh"
     }
 
-    # Encode
     access = jwt.encode(payload_access, key, algorithm=algo)
     refresh = jwt.encode(payload_refresh, key, algorithm=algo)
     
-    # Ensure String
     if isinstance(access, bytes): access = access.decode('utf-8')
     if isinstance(refresh, bytes): refresh = refresh.decode('utf-8')
     
@@ -67,47 +60,26 @@ def create_token_pair(user_id):
 
 class CustomJwtAuth(HttpBearer):
     def authenticate(self, request, token):
-        # 1. Siapkan Kandidat Key
+        # FIX PENTING: Bersihkan token jika user tidak sengaja paste "Bearer <token>" di Swagger
+        if token.startswith("Bearer "):
+            token = token.replace("Bearer ", "").strip()
+            
         _, pub_key = get_rsa_keys()
         
+        # Coba Decode dengan semua kemungkinan Key
         candidates = []
-        # Opsi A: Pakai RSA Public Key (RS256)
-        if pub_key:
-            candidates.append({"key": pub_key, "algo": "RS256", "name": "RSA Public Key"})
-        
-        # Opsi B: Pakai Django Secret Key (HS256) -> Jaga-jaga kalau RSA gagal/tidak ada
-        candidates.append({"key": settings.SECRET_KEY, "algo": "HS256", "name": "Django Secret"})
+        if pub_key: candidates.append({"key": pub_key, "algo": "RS256"})
+        candidates.append({"key": settings.SECRET_KEY, "algo": "HS256"})
 
-        # 2. Coba Decode satu per satu
         for opt in candidates:
             try:
                 payload = jwt.decode(token, opt["key"], algorithms=[opt["algo"]])
-                
-                # Cek Tipe Token
-                if payload.get("type") != "access":
-                    print(f"[AUTH FAIL] Token tipe '{payload.get('type')}' bukan 'access' (via {opt['name']})")
-                    continue # Coba key berikutnya
-
-                user_id = payload.get("user_id")
-                user = User.objects.get(pk=user_id)
-                
-                # BERHASIL!
-                # print(f"[AUTH SUCCESS] User {user.username} via {opt['name']}")
-                return user
-
-            except jwt.ExpiredSignatureError:
-                print(f"[AUTH FAIL] Token Expired via {opt['name']}")
-            except jwt.DecodeError:
-                # Ini wajar jika kita mencoba Key yang salah (misal coba RSA padahal token HS256)
-                # print(f"[AUTH INFO] Gagal decode via {opt['name']} (mungkin beda key)")
-                pass
-            except User.DoesNotExist:
-                print(f"[AUTH FAIL] User ID {payload.get('user_id')} tidak ditemukan di DB")
-            except Exception as e:
-                print(f"[AUTH ERROR] Error via {opt['name']}: {e}")
-
-        # Jika semua loop selesai dan tidak ada return, berarti GAGAL TOTAL
-        print("[AUTH FINAL] Token ditolak oleh semua metode.")
+                if payload.get("type") == "access":
+                    user = User.objects.get(pk=payload.get("user_id"))
+                    return user
+            except:
+                continue
+        
         return None
 
 apiAuth = CustomJwtAuth()
@@ -184,14 +156,12 @@ def mobile_sign_in(request, data: MobileSignInSchema):
 
 @api_v2.post("/auth/token-refresh", response=TokenResponseSchema, auth=None)
 def mobile_token_refresh(request, data: MobileRefreshSchema):
-    # Coba decode refresh token (Hybrid Check)
-    user_id = None
     _, pub_key = get_rsa_keys()
-    
     candidates = []
     if pub_key: candidates.append({"key": pub_key, "algo": "RS256"})
     candidates.append({"key": settings.SECRET_KEY, "algo": "HS256"})
 
+    user_id = None
     for opt in candidates:
         try:
             payload = jwt.decode(data.refresh, opt["key"], algorithms=[opt["algo"]])
@@ -201,7 +171,7 @@ def mobile_token_refresh(request, data: MobileRefreshSchema):
         except: pass
 
     if not user_id:
-        raise HttpError(401, "Refresh token tidak valid atau expired")
+        raise HttpError(401, "Refresh token tidak valid")
 
     access, refresh = create_token_pair(user_id)
     return {"access": access, "refresh": refresh}
@@ -213,23 +183,15 @@ def list_users(request, search: Optional[str] = None):
     if search: qs = qs.filter(username__icontains=search)
     return qs
 
-# --- PROTECTED (FIXED) ---
+# --- PROTECTED ---
 @api_v2.get("/mycourses/", response=List[CourseMemberOut], auth=apiAuth)
 @paginate(CustomPagination)
 def my_courses(request):
     user = request.auth
     if not user: raise HttpError(401, "Unauthorized")
     
-    # Ambil data CourseMember berdasarkan user yang login
     qs = CourseMember.objects.filter(user_id=user)
-    
-    results = []
-    for member in qs:
-        results.append({
-            "id": member.id,
-            "user_id": user.id,            
-            "course_id": member.course_id_id 
-        })
+    results = [{"id": m.id, "user_id": user.id, "course_id": m.course_id_id} for m in qs]
     return results
 
 @api_v2.post("/course/{id}/enroll/", response=CourseMemberOut, auth=apiAuth)
