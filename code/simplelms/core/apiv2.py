@@ -1,7 +1,6 @@
 import jwt
 import datetime
 import os
-import re
 from typing import Any, List, Optional
 from ninja import NinjaAPI, Schema, Query
 from ninja.pagination import PaginationBase, paginate
@@ -15,11 +14,11 @@ from .throttling import SimpleRateThrottle
 from .apiv2_schemas import CourseSchema, CourseMemberOut
 
 # ==========================================
-# 1. SETUP AUTH & TOKEN (JANTUNGNYA)
+# 1. LOGIC AUTHENTICATION (SUPAYA TEST LULUS & DOCS JALAN)
 # ==========================================
 
 def get_rsa_keys():
-    """Helper baca kunci RSA"""
+    """Helper load RSA Keys"""
     priv, pub = None, None
     try:
         priv_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pem')
@@ -28,55 +27,33 @@ def get_rsa_keys():
             with open(priv_path, 'rb') as f: priv = f.read()
         if os.path.exists(pub_path):
             with open(pub_path, 'rb') as f: pub = f.read()
-    except:
-        pass
+    except: pass
     return priv, pub
-
-def create_token_pair(user_id):
-    """Bikin Token Manual (Supaya sinkron sama test)"""
-    priv_key, _ = get_rsa_keys()
-    key = priv_key if priv_key else settings.SECRET_KEY
-    algo = "RS256" if priv_key else "HS256"
-
-    access_token = jwt.encode({
-        "user_id": user_id,
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=1),
-        "type": "access"
-    }, key, algorithm=algo)
-
-    refresh_token = jwt.encode({
-        "user_id": user_id,
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7),
-        "type": "refresh"
-    }, key, algorithm=algo)
-    
-    if isinstance(access_token, bytes): access_token = access_token.decode('utf-8')
-    if isinstance(refresh_token, bytes): refresh_token = refresh_token.decode('utf-8')
-    
-    return access_token, refresh_token
 
 class CustomJwtAuth(HttpBearer):
     def authenticate(self, request, token):
-        # Bersihkan prefix "Bearer" agar aman buat Swagger & Test
+        # 1. Bersihkan Header (Supaya support format "Bearer <token>" dan "<token>")
         if token.lower().startswith("bearer "):
             token = token.split(" ")[1]
 
+        # 2. Siapkan Kandidat Key (RSA dan Secret Key)
         _, pub_key = get_rsa_keys()
         candidates = []
         if pub_key: candidates.append({"key": pub_key, "algo": "RS256"})
         candidates.append({"key": settings.SECRET_KEY, "algo": "HS256"})
 
+        # 3. Coba Decode satu per satu
         for opt in candidates:
             try:
                 payload = jwt.decode(token, opt["key"], algorithms=[opt["algo"]])
                 if payload.get("type") == "access":
-                    user = User.objects.get(pk=payload.get("user_id"))
-                    return user
+                    user_id = payload.get("user_id")
+                    return User.objects.get(pk=user_id)
             except:
-                continue
+                continue # Coba key berikutnya
         return None
 
-# Auth Instance
+# Gunakan Custom Auth ini agar Test OK
 apiAuth = CustomJwtAuth()
 
 # ==========================================
@@ -90,7 +67,7 @@ api_v2 = NinjaAPI(
 )
 
 # ==========================================
-# 3. SCHEMAS (Dari File Lama Kamu)
+# 3. SCHEMAS
 # ==========================================
 class UserOut(Schema):
     id: int
@@ -111,7 +88,7 @@ class SuccessOut(Schema):
     success: bool
     comment_id: Optional[int] = None
 
-# Schema Auth Manual
+# --- AUTH SCHEMAS ---
 class MobileSignInSchema(Schema):
     username: str
     password: str
@@ -119,12 +96,16 @@ class MobileSignInSchema(Schema):
 class MobileRefreshSchema(Schema):
     refresh: str
 
-class TokenResponseSchema(Schema):
+class LoginResponseSchema(Schema):
     access: str
     refresh: str
 
+# KHUSUS BUAT REFRESH: Cuma Access (Sesuai Request Kamu)
+class RefreshResponseSchema(Schema):
+    access: str 
+
 # ==========================================
-# 4. CUSTOM PAGINATION (Dari File Lama Kamu)
+# 4. PAGINATION
 # ==========================================
 class CustomPagination(PaginationBase):
     class Input(Schema):
@@ -140,21 +121,44 @@ class CustomPagination(PaginationBase):
         return {"items": queryset[skip : skip + limit], "total": total, "per_page": limit}
 
 # ==========================================
-# 5. AUTH ENDPOINTS (MANUAL - PENGGANTI LIBRARY)
+# 5. HELPER: CREATE TOKEN
 # ==========================================
-# Kita pasang ini supaya endpoint login muncul lagi & logicnya kita kontrol
+def create_token_simple(user_id, type="access", exp_days=1):
+    priv_key, _ = get_rsa_keys()
+    key = priv_key if priv_key else settings.SECRET_KEY
+    algo = "RS256" if priv_key else "HS256"
+    
+    payload = {
+        "user_id": user_id,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=exp_days),
+        "type": type
+    }
+    token = jwt.encode(payload, key, algorithm=algo)
+    if isinstance(token, bytes): token = token.decode('utf-8')
+    return token
 
-@api_v2.post("/auth/sign-in", response=TokenResponseSchema, auth=None)
+# ==========================================
+# 6. ENDPOINTS
+# ==========================================
+
+# --- AUTH (MANUAL) ---
+
+@api_v2.post("/auth/sign-in", response=LoginResponseSchema, auth=None)
 def mobile_sign_in(request, data: MobileSignInSchema):
     user = authenticate(username=data.username, password=data.password)
     if not user:
         raise HttpError(401, "Username atau password salah")
-    access, refresh = create_token_pair(user.id)
+    
+    # Generate Access & Refresh
+    access = create_token_simple(user.id, "access", 1)
+    refresh = create_token_simple(user.id, "refresh", 7)
+    
     return {"access": access, "refresh": refresh}
 
-@api_v2.post("/auth/token-refresh", response=TokenResponseSchema, auth=None)
+@api_v2.post("/auth/token-refresh", response=RefreshResponseSchema, auth=None)
 def mobile_token_refresh(request, data: MobileRefreshSchema):
-    # Coba decode refresh token
+    # Logic Decode Refresh Token (Hybrid)
+    token = data.refresh
     _, pub_key = get_rsa_keys()
     candidates = []
     if pub_key: candidates.append({"key": pub_key, "algo": "RS256"})
@@ -163,7 +167,7 @@ def mobile_token_refresh(request, data: MobileRefreshSchema):
     user_id = None
     for opt in candidates:
         try:
-            payload = jwt.decode(data.refresh, opt["key"], algorithms=[opt["algo"]])
+            payload = jwt.decode(token, opt["key"], algorithms=[opt["algo"]])
             if payload.get("type") == "refresh":
                 user_id = payload.get("user_id")
                 break
@@ -172,15 +176,15 @@ def mobile_token_refresh(request, data: MobileRefreshSchema):
     if not user_id:
         raise HttpError(401, "Refresh token tidak valid")
 
-    # Generate baru
-    access, refresh = create_token_pair(user_id)
-    return {"access": access, "refresh": refresh}
+    # Generate HANYA Access Token baru
+    new_access = create_token_simple(user_id, "access", 1)
+    
+    # Return Access Only (Sesuai request kamu)
+    return {"access": new_access}
 
-# ==========================================
-# 6. BUSINESS ENDPOINTS (Logic Lama Kamu)
-# ==========================================
 
-# 1. List users
+# --- BUSINESS ENDPOINTS ---
+
 @api_v2.get("/users", response=List[UserOut])
 @paginate(CustomPagination)
 def list_users(request, search: Optional[str] = None):
@@ -189,16 +193,13 @@ def list_users(request, search: Optional[str] = None):
         qs = qs.filter(username__icontains=search)
     return qs
 
-# 2. My Courses (PERBAIKAN: request.user -> request.auth)
 @api_v2.get("/mycourses/", response=List[CourseMemberOut], auth=apiAuth)
 @paginate(CustomPagination)
 def my_courses(request):
-    # FIX: Pakai request.auth karena CustomJwtAuth meletakkan user di situ
-    user = request.auth
+    user = request.auth # Pakai auth, bukan user
     if not user: raise HttpError(401, "Unauthorized")
-
+    
     qs = CourseMember.objects.filter(user_id=user).select_related("course_id")
-
     results = []
     for member in qs:
         results.append({
@@ -208,10 +209,8 @@ def my_courses(request):
         })
     return results
 
-# 3. Enroll course (PERBAIKAN: request.user -> request.auth)
 @api_v2.post("/course/{id}/enroll/", response=CourseMemberOut, auth=apiAuth)
 def enroll_course(request, id: int):
-    # FIX: Pakai request.auth
     user = request.auth
     if not user: raise HttpError(401, "Unauthorized")
 
@@ -224,46 +223,35 @@ def enroll_course(request, id: int):
         raise HttpError(400, "Kamu sudah terdaftar di course ini!")
 
     enrollment = CourseMember.objects.create(user_id=user, course_id=course_obj)
+    return {"id": enrollment.id, "user_id": user.id, "course_id": course_obj.id}
 
-    return {
-        "id": enrollment.id,
-        "user_id": user.id,   
-        "course_id": course_obj.id  
-    }
-
-# 4. Post comment (PERBAIKAN: request.user -> request.auth)
 @api_v2.post("/comments/", response=SuccessOut, auth=apiAuth) 
 def post_comment(request, data: CommentIn):
-    # FIX: Pakai request.auth
     user = request.auth
     if not user: raise HttpError(401, "Unauthorized")
 
-    content = CourseContent.objects.filter(pk=data.content_id).first()
-    if not content:
-        return {"success": False, "comment_id": None, "error": "Content not found"}
+    try:
+        content = CourseContent.objects.get(pk=data.content_id)
+    except CourseContent.DoesNotExist:
+        # Return 200 with error (Logic kode lama kamu)
+        return {"success": False, "comment_id": None} # Atau raise 404 kalau mau strict
 
     member_qs = CourseMember.objects.filter(user_id=user, course_id=content.course_id)
-    
     if not member_qs.exists():
-        # RETURN 400 sesuai spec test kamu (bukan return JSON error 200)
-        raise HttpError(400, "Tidak boleh komentar di sini")
+        # Return json error (Logic kode lama kamu)
+        return {"success": False, "comment_id": None}
 
-    member_obj = member_qs.first()
- 
     comment = Comment.objects.create(
         comment=data.comment, 
-        member_id=member_obj, 
+        member_id=member_qs.first(), 
         content_id=content
     )
-    
     return {"success": True, "comment_id": comment.id}
 
-# 5. List comments
 @api_v2.get("/content/{id}/comments/", response=List[CommentOut])
 @paginate(CustomPagination)
 def list_comments(request, id: int):
     qs = Comment.objects.filter(content_id=id).select_related("member_id__user_id")
-    
     results = []
     for item in qs:
         results.append({
@@ -274,25 +262,11 @@ def list_comments(request, id: int):
         })
     return results
 
-# 6. List Courses
 @api_v2.get("/courses", response=List[CourseSchema])
 @paginate(CustomPagination)
-def list_courses(
-    request,
-    search: str = Query(None),
-    price: str = Query(None),
-    sort: str = Query("id"),
-):
+def list_courses(request, search: str = Query(None), price: str = Query(None), sort: str = Query("id")):
     queryset = Course.objects.all()
-
-    if search:
-        queryset = queryset.filter(name__icontains=search)
-
-    if price:
-        queryset = queryset.filter(price__iexact=price)
-
-    allowed_sort = ["id", "name", "price"]
-    if sort in allowed_sort:
-        queryset = queryset.order_by(sort)
-
+    if search: queryset = queryset.filter(name__icontains=search)
+    if price: queryset = queryset.filter(price__iexact=price)
+    if sort in ["id", "name", "price"]: queryset = queryset.order_by(sort)
     return queryset
