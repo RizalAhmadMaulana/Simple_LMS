@@ -1,6 +1,7 @@
 import jwt
 import datetime
 import os
+import re # Tambahan regex untuk cleaning header
 from typing import Any, List, Optional
 from ninja import NinjaAPI, Schema, Query
 from ninja.pagination import PaginationBase, paginate
@@ -14,31 +15,33 @@ from .throttling import SimpleRateThrottle
 from .apiv2_schemas import CourseSchema, CourseMemberOut
 
 # ==========================================
-# 1. AUTHENTICATION LOGIC (HYBRID & TOLERANT)
+# 1. AUTHENTICATION LOGIC (ROBUST & DEBUG)
 # ==========================================
 
 def get_rsa_keys():
-    """Mencoba load RSA Keys"""
+    """Mencoba load RSA Keys dari file"""
     priv, pub = None, None
     try:
         priv_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pem')
         pub_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pub')
+        
         if os.path.exists(priv_path):
             with open(priv_path, 'rb') as f: priv = f.read()
         if os.path.exists(pub_path):
             with open(pub_path, 'rb') as f: pub = f.read()
-    except:
-        pass
+    except Exception as e:
+        print(f"[KEY ERROR] Gagal baca key: {e}")
     return priv, pub
 
 def create_token_pair(user_id):
-    """Membuat token manual (Pengganti Library)"""
+    """Membuat token (Prioritas RSA, Fallback ke SECRET_KEY)"""
     priv_key, _ = get_rsa_keys()
     
     # Pilih Key & Algoritma
     key = priv_key if priv_key else settings.SECRET_KEY
     algo = "RS256" if priv_key else "HS256"
 
+    # Payload
     payload_access = {
         "user_id": user_id,
         "exp": datetime.datetime.utcnow() + datetime.timedelta(days=1),
@@ -53,6 +56,7 @@ def create_token_pair(user_id):
     access = jwt.encode(payload_access, key, algorithm=algo)
     refresh = jwt.encode(payload_refresh, key, algorithm=algo)
     
+    # Pastikan string
     if isinstance(access, bytes): access = access.decode('utf-8')
     if isinstance(refresh, bytes): refresh = refresh.decode('utf-8')
     
@@ -60,28 +64,41 @@ def create_token_pair(user_id):
 
 class CustomJwtAuth(HttpBearer):
     def authenticate(self, request, token):
-        # 1. Bersihkan prefix "Bearer " (Biar Swagger & Test sama-sama jalan)
-        if token.lower().startswith("bearer "):
-            token = token.split(" ")[1]
+        # 1. CLEANING TOKEN (Penting untuk Swagger/Postman)
+        # Regex ini menghapus kata "Bearer" (case insensitive) dan spasi di depannya
+        token = re.sub(r'^bearer\s+', '', token, flags=re.IGNORECASE).strip()
 
-        # 2. Siapkan Kandidat Key (Coba RSA dulu, kalau gagal coba Secret)
+        # 2. SIAPKAN KANDIDAT KUNCI
         _, pub_key = get_rsa_keys()
+        
         candidates = []
-        if pub_key: candidates.append({"key": pub_key, "algo": "RS256"})
-        candidates.append({"key": settings.SECRET_KEY, "algo": "HS256"})
+        if pub_key: 
+            candidates.append({"key": pub_key, "algo": "RS256", "name": "RSA"}) 
+        candidates.append({"key": settings.SECRET_KEY, "algo": "HS256", "name": "Secret"}) 
 
-        # 3. Coba Decode
+        # 3. DEBUG & DECODE
+        # print(f"[AUTH DEBUG] Trying to decode token: {token[:10]}...") # Uncomment jika mau liat token masuk
+        
         for opt in candidates:
             try:
                 payload = jwt.decode(token, opt["key"], algorithms=[opt["algo"]])
+                
                 if payload.get("type") == "access":
                     user_id = payload.get("user_id")
-                    return User.objects.get(pk=user_id)
-            except:
-                continue
+                    user = User.objects.get(pk=user_id)
+                    # print(f"[AUTH SUCCESS] User: {user.username} via {opt['name']}")
+                    return user
+            except jwt.ExpiredSignatureError:
+                print(f"[AUTH FAIL] Token Expired via {opt['name']}")
+            except jwt.DecodeError:
+                # print(f"[AUTH FAIL] Decode gagal via {opt['name']} (Wrong Key?)")
+                pass
+            except Exception as e:
+                print(f"[AUTH ERROR] Error via {opt['name']}: {e}")
+        
+        print("[AUTH FINAL] Token rejected by all methods.")
         return None
 
-# Gunakan Custom Auth ini
 apiAuth = CustomJwtAuth()
 
 # ==========================================
@@ -141,12 +158,12 @@ class CustomPagination(PaginationBase):
         return {"items": queryset[skip : skip + limit], "total": total, "per_page": limit}
 
 # ==========================================
-# 4. AUTH ENDPOINTS (INI YANG BIKIN MUNCUL DI DOCS)
+# 4. ENDPOINTS
 # ==========================================
 
+# --- AUTH ---
 @api_v2.post("/auth/sign-in", response=TokenResponseSchema, auth=None)
 def mobile_sign_in(request, data: MobileSignInSchema):
-    """Endpoint Login Manual untuk Mobile/Docs"""
     user = authenticate(username=data.username, password=data.password)
     if not user:
         raise HttpError(401, "Username atau password salah")
@@ -156,7 +173,8 @@ def mobile_sign_in(request, data: MobileSignInSchema):
 
 @api_v2.post("/auth/token-refresh", response=TokenResponseSchema, auth=None)
 def mobile_token_refresh(request, data: MobileRefreshSchema):
-    """Endpoint Refresh Token Manual"""
+    token = re.sub(r'^bearer\s+', '', data.refresh, flags=re.IGNORECASE).strip()
+    
     _, pub_key = get_rsa_keys()
     candidates = []
     if pub_key: candidates.append({"key": pub_key, "algo": "RS256"})
@@ -165,7 +183,7 @@ def mobile_token_refresh(request, data: MobileRefreshSchema):
     user_id = None
     for opt in candidates:
         try:
-            payload = jwt.decode(data.refresh, opt["key"], algorithms=[opt["algo"]])
+            payload = jwt.decode(token, opt["key"], algorithms=[opt["algo"]])
             if payload.get("type") == "refresh":
                 user_id = payload.get("user_id")
                 break
@@ -177,9 +195,10 @@ def mobile_token_refresh(request, data: MobileRefreshSchema):
     access, refresh = create_token_pair(user_id)
     return {"access": access, "refresh": refresh}
 
-# ==========================================
-# 5. BUSINESS ENDPOINTS
-# ==========================================
+# --- DEBUG ENDPOINT (Biar kamu bisa cek token valid/enggak) ---
+@api_v2.get("/auth/check", auth=apiAuth)
+def check_auth(request):
+    return {"message": "Token Valid!", "user": request.auth.username}
 
 @api_v2.get("/users", response=List[UserOut])
 @paginate(CustomPagination)
@@ -188,14 +207,24 @@ def list_users(request, search: Optional[str] = None):
     if search: qs = qs.filter(username__icontains=search)
     return qs
 
+# --- PROTECTED ENDPOINTS ---
 @api_v2.get("/mycourses/", response=List[CourseMemberOut], auth=apiAuth)
 @paginate(CustomPagination)
 def my_courses(request):
     user = request.auth
     if not user: raise HttpError(401, "Unauthorized")
     
+    # Filter menggunakan object user
     qs = CourseMember.objects.filter(user_id=user)
-    results = [{"id": m.id, "user_id": user.id, "course_id": m.course_id_id} for m in qs]
+    
+    # Mapping manual yang aman
+    results = []
+    for m in qs:
+        results.append({
+            "id": m.id,
+            "user_id": user.id,
+            "course_id": m.course_id_id  # Mengambil ID langsung
+        })
     return results
 
 @api_v2.post("/course/{id}/enroll/", response=CourseMemberOut, auth=apiAuth)
@@ -235,6 +264,7 @@ def post_comment(request, data: CommentIn):
     )
     return {"success": True, "comment_id": comment.id}
 
+# --- PUBLIC ENDPOINTS ---
 @api_v2.get("/content/{id}/comments/", response=List[CommentOut])
 @paginate(CustomPagination)
 def list_comments(request, id: int):
