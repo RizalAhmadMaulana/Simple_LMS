@@ -1,6 +1,7 @@
 import jwt
 import datetime
 import os
+import re  # Wajib import re
 from typing import Any, List, Optional
 from ninja import NinjaAPI, Schema, Query
 from ninja.pagination import PaginationBase, paginate
@@ -14,46 +15,65 @@ from .throttling import SimpleRateThrottle
 from .apiv2_schemas import CourseSchema, CourseMemberOut
 
 # ==========================================
-# 1. LOGIC AUTHENTICATION (SUPAYA TEST LULUS & DOCS JALAN)
+# 1. LOGIC AUTHENTICATION (SINKRON & AMAN)
 # ==========================================
 
 def get_rsa_keys():
-    """Helper load RSA Keys"""
+    """
+    Mencoba load RSA Keys.
+    Return: (private_key, public_key)
+    """
     priv, pub = None, None
     try:
+        # Coba cari path kunci
         priv_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pem')
         pub_path = os.path.join(settings.BASE_DIR, 'jwt-signing.pub')
+        
+        # Baca Private Key
         if os.path.exists(priv_path):
             with open(priv_path, 'rb') as f: priv = f.read()
+            
+        # Baca Public Key
         if os.path.exists(pub_path):
             with open(pub_path, 'rb') as f: pub = f.read()
-    except: pass
+            
+    except Exception as e:
+        print(f"[KEY LOAD ERROR] {e}")
+        
     return priv, pub
 
 class CustomJwtAuth(HttpBearer):
     def authenticate(self, request, token):
-        # 1. Bersihkan Header (Supaya support format "Bearer <token>" dan "<token>")
-        if token.lower().startswith("bearer "):
-            token = token.split(" ")[1]
+        # 1. Bersihkan Header "Bearer "
+        # Regex ini menghapus "Bearer" (besar/kecil) dan spasi
+        token = re.sub(r'^bearer\s+', '', token, flags=re.IGNORECASE).strip()
 
-        # 2. Siapkan Kandidat Key (RSA dan Secret Key)
+        # 2. Siapkan Kandidat Key
         _, pub_key = get_rsa_keys()
+        
         candidates = []
-        if pub_key: candidates.append({"key": pub_key, "algo": "RS256"})
+        # Prioritas 1: RSA (Hanya jika Public Key benar-benar ada)
+        if pub_key: 
+            candidates.append({"key": pub_key, "algo": "RS256"})
+        
+        # Prioritas 2: Secret Key (Fallback)
         candidates.append({"key": settings.SECRET_KEY, "algo": "HS256"})
 
-        # 3. Coba Decode satu per satu
+        # 3. Coba Decode
         for opt in candidates:
             try:
                 payload = jwt.decode(token, opt["key"], algorithms=[opt["algo"]])
                 if payload.get("type") == "access":
                     user_id = payload.get("user_id")
                     return User.objects.get(pk=user_id)
-            except:
-                continue # Coba key berikutnya
+            except Exception as e:
+                # Uncomment baris ini untuk melihat error di terminal Railway/Docker
+                # print(f"[AUTH FAIL] Algo: {opt['algo']} | Error: {e}")
+                continue 
+        
         return None
 
-# Gunakan Custom Auth ini agar Test OK
+# Instance Auth
 apiAuth = CustomJwtAuth()
 
 # ==========================================
@@ -88,7 +108,7 @@ class SuccessOut(Schema):
     success: bool
     comment_id: Optional[int] = None
 
-# --- AUTH SCHEMAS ---
+# Auth Schemas
 class MobileSignInSchema(Schema):
     username: str
     password: str
@@ -100,7 +120,6 @@ class LoginResponseSchema(Schema):
     access: str
     refresh: str
 
-# KHUSUS BUAT REFRESH: Cuma Access (Sesuai Request Kamu)
 class RefreshResponseSchema(Schema):
     access: str 
 
@@ -121,18 +140,27 @@ class CustomPagination(PaginationBase):
         return {"items": queryset[skip : skip + limit], "total": total, "per_page": limit}
 
 # ==========================================
-# 5. HELPER: CREATE TOKEN
+# 5. HELPER: CREATE TOKEN (FIXED LOGIC)
 # ==========================================
 def create_token_simple(user_id, type="access", exp_days=1):
-    priv_key, _ = get_rsa_keys()
-    key = priv_key if priv_key else settings.SECRET_KEY
-    algo = "RS256" if priv_key else "HS256"
+    priv_key, pub_key = get_rsa_keys()
+    
+    # FIX PENTING: Hanya pakai RSA jika KEDUA kunci (Priv & Pub) ada!
+    # Kalau cuma punya Private tapi gak punya Public, nanti Auth-nya gagal.
+    if priv_key and pub_key:
+        key = priv_key
+        algo = "RS256"
+    else:
+        # Fallback ke Secret Key (Pasti aman karena Auth juga punya ini)
+        key = settings.SECRET_KEY
+        algo = "HS256"
     
     payload = {
         "user_id": user_id,
         "exp": datetime.datetime.utcnow() + datetime.timedelta(days=exp_days),
         "type": type
     }
+    
     token = jwt.encode(payload, key, algorithm=algo)
     if isinstance(token, bytes): token = token.decode('utf-8')
     return token
@@ -141,15 +169,13 @@ def create_token_simple(user_id, type="access", exp_days=1):
 # 6. ENDPOINTS
 # ==========================================
 
-# --- AUTH (MANUAL) ---
-
+# --- AUTH ---
 @api_v2.post("/auth/sign-in", response=LoginResponseSchema, auth=None)
 def mobile_sign_in(request, data: MobileSignInSchema):
     user = authenticate(username=data.username, password=data.password)
     if not user:
         raise HttpError(401, "Username atau password salah")
     
-    # Generate Access & Refresh
     access = create_token_simple(user.id, "access", 1)
     refresh = create_token_simple(user.id, "refresh", 7)
     
@@ -157,8 +183,9 @@ def mobile_sign_in(request, data: MobileSignInSchema):
 
 @api_v2.post("/auth/token-refresh", response=RefreshResponseSchema, auth=None)
 def mobile_token_refresh(request, data: MobileRefreshSchema):
-    # Logic Decode Refresh Token (Hybrid)
-    token = data.refresh
+    token = re.sub(r'^bearer\s+', '', data.refresh, flags=re.IGNORECASE).strip()
+    
+    # Cek Validitas Refresh Token
     _, pub_key = get_rsa_keys()
     candidates = []
     if pub_key: candidates.append({"key": pub_key, "algo": "RS256"})
@@ -176,12 +203,8 @@ def mobile_token_refresh(request, data: MobileRefreshSchema):
     if not user_id:
         raise HttpError(401, "Refresh token tidak valid")
 
-    # Generate HANYA Access Token baru
     new_access = create_token_simple(user_id, "access", 1)
-    
-    # Return Access Only (Sesuai request kamu)
     return {"access": new_access}
-
 
 # --- BUSINESS ENDPOINTS ---
 
@@ -189,14 +212,13 @@ def mobile_token_refresh(request, data: MobileRefreshSchema):
 @paginate(CustomPagination)
 def list_users(request, search: Optional[str] = None):
     qs = User.objects.all()
-    if search:
-        qs = qs.filter(username__icontains=search)
+    if search: qs = qs.filter(username__icontains=search)
     return qs
 
 @api_v2.get("/mycourses/", response=List[CourseMemberOut], auth=apiAuth)
 @paginate(CustomPagination)
 def my_courses(request):
-    user = request.auth # Pakai auth, bukan user
+    user = request.auth
     if not user: raise HttpError(401, "Unauthorized")
     
     qs = CourseMember.objects.filter(user_id=user).select_related("course_id")
@@ -233,12 +255,10 @@ def post_comment(request, data: CommentIn):
     try:
         content = CourseContent.objects.get(pk=data.content_id)
     except CourseContent.DoesNotExist:
-        # Return 200 with error (Logic kode lama kamu)
-        return {"success": False, "comment_id": None} # Atau raise 404 kalau mau strict
+        return {"success": False, "comment_id": None}
 
     member_qs = CourseMember.objects.filter(user_id=user, course_id=content.course_id)
     if not member_qs.exists():
-        # Return json error (Logic kode lama kamu)
         return {"success": False, "comment_id": None}
 
     comment = Comment.objects.create(
